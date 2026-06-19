@@ -538,43 +538,50 @@ func (h *AuthHandler) storeOAuthRedirect(c *gin.Context, clientID, redirectURI s
 	return nil
 }
 
+// validateOAuthRedirectURI validates the OAuth redirect URI against the client configuration.
+func (h *AuthHandler) validateOAuthRedirectURI(clientID, redirectURI string) bool {
+	if clientID == "" || h.oauthProviderService == nil {
+		return false
+	}
+	client, err := h.oauthProviderService.GetPublicClient(clientID)
+	if err != nil {
+		return false
+	}
+	return h.oauthProviderService.ValidateRedirectURI(client, redirectURI) == nil
+}
+
 // completeOAuthLogin finishes a social-login callback. When a validated
 // redirect_uri was stored, it redirects the browser back to the app with the
 // tokens as query parameters; otherwise it returns the tokens as JSON.
 func (h *AuthHandler) completeOAuthLogin(c *gin.Context, loginResp *dto.LoginResponse, clientID string) {
 	isProd := gin.Mode() == gin.ReleaseMode
 	redirectURI, err := c.Cookie("oauth_redirect")
-	if err == nil && redirectURI != "" {
-		c.SetCookie("oauth_redirect", "", -1, "/", "", isProd, true)
-
-		// Re-validate to prevent open redirect via cookie tampering
-		isValid := false
-		if clientID != "" && h.oauthProviderService != nil {
-			client, cerr := h.oauthProviderService.GetPublicClient(clientID)
-			if cerr == nil && h.oauthProviderService.ValidateRedirectURI(client, redirectURI) == nil {
-				isValid = true
-			}
-		}
-		
-		if !isValid {
-			c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid redirect URI", nil))
-			return
-		}
-
-		if target, perr := url.Parse(redirectURI); perr == nil {
-			if target.Scheme == "http" || target.Scheme == "https" {
-				q := target.Query()
-				q.Set("access_token", loginResp.AccessToken)
-				if loginResp.RefreshToken != "" {
-					q.Set("refresh_token", loginResp.RefreshToken)
-				}
-				target.RawQuery = q.Encode()
-				c.Redirect(http.StatusFound, target.String())
-				return
-			}
-		}
+	
+	if err != nil || redirectURI == "" {
+		c.JSON(http.StatusOK, utils.SuccessResponse(msgLoginSuccess, loginResp))
+		return
 	}
-	c.JSON(http.StatusOK, utils.SuccessResponse(msgLoginSuccess, loginResp))
+	
+	c.SetCookie("oauth_redirect", "", -1, "/", "", isProd, true)
+
+	if !h.validateOAuthRedirectURI(clientID, redirectURI) {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid redirect URI", nil))
+		return
+	}
+
+	target, perr := url.Parse(redirectURI)
+	if perr != nil || (target.Scheme != "http" && target.Scheme != "https") {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid redirect URI scheme", nil))
+		return
+	}
+
+	q := target.Query()
+	q.Set("access_token", loginResp.AccessToken)
+	if loginResp.RefreshToken != "" {
+		q.Set("refresh_token", loginResp.RefreshToken)
+	}
+	target.RawQuery = q.Encode()
+	c.Redirect(http.StatusFound, target.String())
 }
 
 // GoogleLogin initiates Google OAuth login
@@ -650,13 +657,25 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	email := userInfo["email"].(string)
-	firstName := userInfo["given_name"].(string)
+	email, ok := userInfo["email"].(string)
+	if !ok || email == "" {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Google email not available", errors.New("missing or invalid email")))
+		return
+	}
+	firstName, ok := userInfo["given_name"].(string)
+	if !ok || firstName == "" {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid Google user data", errors.New("missing or invalid given_name")))
+		return
+	}
 	lastName := ""
 	if val, ok := userInfo["family_name"].(string); ok {
 		lastName = val
 	}
-	oauthID := userInfo["id"].(string)
+	oauthID, ok := userInfo["id"].(string)
+	if !ok || oauthID == "" {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid Google user data", errors.New("missing or invalid id")))
+		return
+	}
 
 	// Login or Register
 	ipAddress := c.ClientIP()
@@ -706,6 +725,26 @@ func (h *AuthHandler) GitHubLogin(c *gin.Context) {
 	c.Redirect(http.StatusTemporaryRedirect, url)
 }
 
+func getGitHubNames(userInfo map[string]interface{}) (string, string, error) {
+	if name, ok := userInfo["name"].(string); ok && name != "" {
+		parts := strings.SplitN(name, " ", 2)
+
+		lastName := ""
+		if len(parts) > 1 {
+			lastName = parts[1]
+		}
+
+		return parts[0], lastName, nil
+	}
+
+	login, ok := userInfo["login"].(string)
+	if !ok || login == "" {
+		return "", "", errors.New("missing or invalid login")
+	}
+
+	return login, "", nil
+}
+
 // GitHubCallback handles GitHub OAuth callback
 // @Summary GitHub OAuth callback
 // @Tags auth
@@ -741,22 +780,27 @@ func (h *AuthHandler) GitHubCallback(c *gin.Context) {
 		return
 	}
 
-	email := userInfo["email"].(string)
-
-	// GitHub names are often one string "Name" or just login
-	firstName := ""
-	lastName := ""
-	if name, ok := userInfo["name"].(string); ok && name != "" {
-		parts := strings.SplitN(name, " ", 2)
-		firstName = parts[0]
-		if len(parts) > 1 {
-			lastName = parts[1]
-		}
-	} else {
-		firstName = userInfo["login"].(string)
+	email, ok := userInfo["email"].(string)
+	if !ok || email == "" {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("GitHub email not available", errors.New("missing or invalid email")))
+		return
 	}
 
-	oauthID := fmt.Sprintf("%.0f", userInfo["id"].(float64)) // GitHub ID is number
+	// GitHub names are often one string "Name" or just login
+	firstName, lastName, err := getGitHubNames(userInfo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest,
+			utils.ErrorResponse("Invalid GitHub user data", err))
+		return
+	}
+
+	idValue, ok := userInfo["id"].(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, utils.ErrorResponse("Invalid GitHub user data", errors.New("missing or invalid id")))
+		return
+	}
+
+	oauthID := fmt.Sprintf("%.0f", idValue) // GitHub ID is number
 
 	ipAddress := c.ClientIP()
 	userAgent := c.GetHeader(userAgentHeader)
