@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 func getEnvAsInt(key string, defaultVal int) int {
@@ -19,6 +20,17 @@ func getEnvAsBool(key string, defaultVal bool) bool {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			return boolValue
 		}
+	}
+	return defaultVal
+}
+
+func getEnvAsDuration(key string, defaultVal time.Duration) time.Duration {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	if d, err := time.ParseDuration(val); err == nil {
+		return d
 	}
 	return defaultVal
 }

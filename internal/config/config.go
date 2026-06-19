@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -25,9 +26,11 @@ type AppConfig struct {
 }
 
 type DatabaseConfig struct {
-	URL     string
-	PoolMin int
-	PoolMax int
+	URL             string
+	PoolMin         int
+	PoolMax         int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
 }
 
 type RedisConfig struct {
@@ -133,9 +136,11 @@ func LoadConfig() *Config {
 			URL:  appURL,
 		},
 		Database: DatabaseConfig{
-			URL:     getEnv("DATABASE_URL", ""),
-			PoolMin: poolMin,
-			PoolMax: poolMax,
+			URL:             getEnv("DATABASE_URL", ""),
+			PoolMin:         poolMin,
+			PoolMax:         poolMax,
+			ConnMaxLifetime: getEnvAsDuration("DB_CONN_MAX_LIFETIME", 1*time.Hour),
+			ConnMaxIdleTime: getEnvAsDuration("DB_CONN_MAX_IDLE_TIME", 10*time.Minute),
 		},
 		Redis: RedisConfig{
 			URL: getEnv("REDIS_URL", ""),
