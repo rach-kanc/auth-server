@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -30,7 +31,12 @@ func getEnvAsDuration(key string, defaultVal time.Duration) time.Duration {
 		return defaultVal
 	}
 	if d, err := time.ParseDuration(val); err == nil {
-		return d
+		if d > 0 {
+			return d
+		}
+		log.Printf("Warning: %s is invalid (must be > 0), using default: %v", key, defaultVal)
+	} else {
+		log.Printf("Warning: failed to parse %s as duration (%v), using default: %v", key, err, defaultVal)
 	}
 	return defaultVal
 }

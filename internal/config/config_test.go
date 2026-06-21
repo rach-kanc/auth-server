@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -22,7 +23,15 @@ func TestGetEnvAsDuration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			const key = "TEST_ENV_DURATION"
-			t.Setenv(key, tt.envValue)
+			if tt.envValue != "" {
+				t.Setenv(key, tt.envValue)
+			} else {
+				orig, ok := os.LookupEnv(key)
+				os.Unsetenv(key)
+				if ok {
+					t.Cleanup(func() { os.Setenv(key, orig) })
+				}
+			}
 			val := getEnvAsDuration(key, tt.defaultVal)
 			assert.Equal(t, tt.expected, val)
 		})
@@ -48,8 +57,25 @@ func TestLoadConfigDatabasePooling(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("DB_CONN_MAX_LIFETIME", tt.lifetimeVal)
-			t.Setenv("DB_CONN_MAX_IDLE_TIME", tt.idleVal)
+			if tt.lifetimeVal != "" {
+				t.Setenv("DB_CONN_MAX_LIFETIME", tt.lifetimeVal)
+			} else {
+				orig, ok := os.LookupEnv("DB_CONN_MAX_LIFETIME")
+				os.Unsetenv("DB_CONN_MAX_LIFETIME")
+				if ok {
+					t.Cleanup(func() { os.Setenv("DB_CONN_MAX_LIFETIME", orig) })
+				}
+			}
+
+			if tt.idleVal != "" {
+				t.Setenv("DB_CONN_MAX_IDLE_TIME", tt.idleVal)
+			} else {
+				orig, ok := os.LookupEnv("DB_CONN_MAX_IDLE_TIME")
+				os.Unsetenv("DB_CONN_MAX_IDLE_TIME")
+				if ok {
+					t.Cleanup(func() { os.Setenv("DB_CONN_MAX_IDLE_TIME", orig) })
+				}
+			}
 
 			cfg := LoadConfig()
 			assert.Equal(t, tt.expectedLife, cfg.Database.ConnMaxLifetime)
